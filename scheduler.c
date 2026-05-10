@@ -1098,7 +1098,7 @@ VALUE rb_fiber_scheduler_blocking_operation_wait(VALUE scheduler, void* (*functi
     // Create a new BlockingOperation with the blocking operation
     VALUE blocking_operation = rb_fiber_scheduler_blocking_operation_new(function, data, unblock_function, data2, flags, state);
 
-    rb_fiber_scheduler_blocking_operation_t *operation = get_blocking_operation(blocking_operation);
+    rb_fiber_scheduler_blocking_operation_t *operation = NULL; // get_blocking_operation(blocking_operation);
 
     VALUE result = rb_funcall(scheduler, id_blocking_operation_wait, 1, blocking_operation);
 
