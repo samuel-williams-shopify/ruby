@@ -211,6 +211,7 @@ rb_fiber_scheduler_blocking_operation_execute(rb_fiber_scheduler_blocking_operat
     }
 
     // Now we're executing - call the function
+    fprintf(stderr, "[blocking_operation] execute: op=%p state=%p\n", (void*)blocking_operation, (void*)blocking_operation->state);
     blocking_operation->state->result = blocking_operation->function(blocking_operation->data);
     blocking_operation->state->saved_errno = errno;
 
@@ -1088,6 +1089,13 @@ rb_fiber_scheduler_address_resolve(VALUE scheduler, VALUE hostname)
  *       Thread.new { blocking_operation.call }.join
  *     end
  */
+static VALUE
+scheduler_blocking_operation_wait_call(VALUE _args)
+{
+    VALUE *args = (VALUE *)_args;
+    return rb_funcall(args[0], id_blocking_operation_wait, 1, args[1]);
+}
+
 VALUE rb_fiber_scheduler_blocking_operation_wait(VALUE scheduler, void* (*function)(void *), void *data, rb_unblock_function_t *unblock_function, void *data2, int flags, struct rb_fiber_scheduler_blocking_operation_state *state)
 {
     // Check if scheduler supports blocking_operation_wait before creating the object
@@ -1098,10 +1106,22 @@ VALUE rb_fiber_scheduler_blocking_operation_wait(VALUE scheduler, void* (*functi
     // Create a new BlockingOperation with the blocking operation
     VALUE blocking_operation = rb_fiber_scheduler_blocking_operation_new(function, data, unblock_function, data2, flags, state);
 
-    VALUE result = rb_funcall(scheduler, id_blocking_operation_wait, 1, blocking_operation);
-
-    // Get the operation data to check if it was executed
     rb_fiber_scheduler_blocking_operation_t *operation = get_blocking_operation(blocking_operation);
+    fprintf(stderr, "[blocking_operation] wait: op=%p state=%p\n", (void*)operation, (void*)state);
+
+    int tag = 0;
+    VALUE call_args[2] = {scheduler, blocking_operation};
+    VALUE result = rb_protect(scheduler_blocking_operation_wait_call, (VALUE)call_args, &tag);
+
+    if (tag) {
+        // Exception from blocking_operation_wait: cleanup still runs below,
+        // but log this so we can detect when a stale state pointer is later accessed.
+        fprintf(stderr, "[blocking_operation] wait exception: op=%p state=%p (now dangling!)\n", (void*)operation, (void*)state);
+    }
+
+    // Get fresh operation pointer after rb_protect (GC may have run)
+    operation = get_blocking_operation(blocking_operation);
+    // Get the operation data to check if it was executed
     rb_atomic_t current_status = RUBY_ATOMIC_LOAD(operation->status);
 
     // Invalidate the operation now that we're done with it
@@ -1113,6 +1133,9 @@ VALUE rb_fiber_scheduler_blocking_operation_wait(VALUE scheduler, void* (*functi
 
     // Ensure that the blocking operation remains visible until this point:
     RB_GC_GUARD(blocking_operation);
+
+    // Re-raise any exception from the scheduler after cleanup.
+    if (tag) rb_jump_tag(tag);
 
     // If the blocking operation was never executed, return Qundef to signal the caller to use rb_nogvl instead
     if (current_status == RB_FIBER_SCHEDULER_BLOCKING_OPERATION_STATUS_QUEUED) {
@@ -1212,6 +1235,7 @@ rb_fiber_scheduler_blocking_operation_cancel(rb_fiber_scheduler_blocking_operati
 
         case RB_FIBER_SCHEDULER_BLOCKING_OPERATION_STATUS_EXECUTING:
             // Work is running - mark cancelled AND call unblock function
+            fprintf(stderr, "[blocking_operation] cancel(executing): op=%p state=%p\n", (void*)blocking_operation, (void*)blocking_operation->state);
             if (RUBY_ATOMIC_CAS(blocking_operation->status, current_state, RB_FIBER_SCHEDULER_BLOCKING_OPERATION_STATUS_CANCELLED) != current_state) {
                 // State changed between load and CAS - operation may have completed:
                 return 0;
