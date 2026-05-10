@@ -25,8 +25,8 @@ class TestBlockingOperationException < Test::Unit::TestCase
   end
 
   # Reproduce the tcp_socket.rb pattern: a blocking IO operation (large
-  # IO::Buffer copy) raises through the scheduler, and subsequent socket
-  # operations (including close) must not crash.
+  # IO::Buffer copy) raises through the scheduler, then we close a socket.
+  # If the exception corrupted scheduler state, server.close may crash.
   def test_blocking_operation_exception_with_socket_close
     skip "IO::Buffer not available" unless defined?(IO::Buffer)
 
@@ -36,35 +36,28 @@ class TestBlockingOperationException < Test::Unit::TestCase
     source.clear(65) # fill with 'A'
 
     server = TCPServer.new("127.0.0.1", 0)
-    port   = server.addr[1]
-
     caught = []
 
+    # Run the blocking operation that raises inside a scheduled thread
     Thread.new do
-      scheduler = InterruptingScheduler.new
-      Fiber.set_scheduler(scheduler)
-
-      # Fiber 1: the blocking operation that will raise through the scheduler
+      Fiber.set_scheduler(InterruptingScheduler.new)
       Fiber.schedule do
         dest.copy(source, 0, size, 0)
       rescue Interrupt => e
         caught << e
       end
-
-      # Fiber 2: closes the server socket after the blocking operation fiber
-      # finishes (mirrors tcp_socket.rb:48). With the bug, the scheduler's
-      # internal state may be corrupted by the exception, causing a SEGV here.
-      Fiber.schedule do
-        Fiber.yield  # let the blocking fiber run first
-        server.close
-      end
     end.join
 
     assert_equal 1, caught.size, "Expected exactly one Interrupt"
 
-    # Force GC to exercise the dfree path for any dangling blocking_operation
+    # After the exception propagated through rb_fiber_scheduler_blocking_operation_wait,
+    # operation->state is a dangling pointer. Trigger GC and then close a socket:
+    # if the dangling pointer is somehow dereferenced during these operations,
+    # ASAN/valgrind/the OS will detect it.
     GC.start(full_mark: true, immediate_sweep: true)
     GC.compact if GC.respond_to?(:compact)
+
+    server.close  # mirrors tcp_socket.rb:48
 
     assert_equal size, dest.size
   ensure
