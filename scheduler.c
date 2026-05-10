@@ -1088,6 +1088,15 @@ rb_fiber_scheduler_address_resolve(VALUE scheduler, VALUE hostname)
  *       Thread.new { blocking_operation.call }.join
  *     end
  */
+// Helper for rb_protect: calls scheduler.blocking_operation_wait(blocking_operation).
+// args[0] = scheduler VALUE, args[1] = blocking_operation VALUE.
+static VALUE
+scheduler_blocking_operation_wait_call(VALUE _args)
+{
+    VALUE *args = (VALUE *)_args;
+    return rb_funcall(args[0], id_blocking_operation_wait, 1, args[1]);
+}
+
 VALUE rb_fiber_scheduler_blocking_operation_wait(VALUE scheduler, void* (*function)(void *), void *data, rb_unblock_function_t *unblock_function, void *data2, int flags, struct rb_fiber_scheduler_blocking_operation_state *state)
 {
     // Check if scheduler supports blocking_operation_wait before creating the object
@@ -1098,24 +1107,34 @@ VALUE rb_fiber_scheduler_blocking_operation_wait(VALUE scheduler, void* (*functi
     // Create a new BlockingOperation with the blocking operation
     VALUE blocking_operation = rb_fiber_scheduler_blocking_operation_new(function, data, unblock_function, data2, flags, state);
 
-    rb_fiber_scheduler_blocking_operation_t *operation = NULL; // get_blocking_operation(blocking_operation);
+    rb_fiber_scheduler_blocking_operation_t *operation = get_blocking_operation(blocking_operation);
 
-    VALUE result = rb_funcall(scheduler, id_blocking_operation_wait, 1, blocking_operation);
+    // Use rb_protect so that cleanup runs even when the scheduler raises an exception
+    // (e.g. via rb_jump_tag from worker_pool_call). Without this, a longjmp from
+    // inside rb_funcall bypasses the cleanup below and RB_GC_GUARD, leaving
+    // operation with stale pointers and blocking_operation without a live GC root.
+    VALUE call_args[2] = {scheduler, blocking_operation};
+    int tag = 0;
+    VALUE result = rb_protect(scheduler_blocking_operation_wait_call, (VALUE)call_args, &tag);
 
     operation = get_blocking_operation(blocking_operation);
 
     // Get the operation data to check if it was executed
     rb_atomic_t current_status = RUBY_ATOMIC_LOAD(operation->status);
 
-    // Invalidate the operation now that we're done with it
+    // Invalidate the operation now that we're done with it — must happen even on
+    // exception paths, since operation->state may point to a caller's stack frame.
     operation->function = NULL;
     operation->state = NULL;
     operation->data = NULL;
     operation->data2 = NULL;
     operation->unblock_function = NULL;
 
-    // Ensure that the blocking operation remains visible until this point:
+    // Ensure that blocking_operation remains a live GC root through the cleanup above.
     RB_GC_GUARD(blocking_operation);
+
+    // Re-raise any exception from the scheduler after cleanup.
+    if (tag) rb_jump_tag(tag);
 
     // If the blocking operation was never executed, return Qundef to signal the caller to use rb_nogvl instead
     if (current_status == RB_FIBER_SCHEDULER_BLOCKING_OPERATION_STATUS_QUEUED) {
