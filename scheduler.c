@@ -1097,29 +1097,12 @@ VALUE rb_fiber_scheduler_blocking_operation_wait(VALUE scheduler, void* (*functi
 
     // Create a new BlockingOperation with the blocking operation
     VALUE blocking_operation = rb_fiber_scheduler_blocking_operation_new(function, data, unblock_function, data2, flags, state);
-    // Success, this works:
-    rb_fiber_scheduler_blocking_operation_t *operation = get_blocking_operation(blocking_operation);
 
-    size_t gc_count_before = rb_gc_count();
-    size_t minor_before = rb_gc_stat(ID2SYM(rb_intern("minor_gc_count")));
-    size_t major_before = rb_gc_stat(ID2SYM(rb_intern("major_gc_count")));
-    fprintf(stderr, "before rb_funcall: gc_count=%zu minor=%zu major=%zu operation=%p\n",
-            gc_count_before, minor_before, major_before, operation);
+    rb_fiber_scheduler_blocking_operation_t *operation = get_blocking_operation(blocking_operation);
 
     VALUE result = rb_funcall(scheduler, id_blocking_operation_wait, 1, blocking_operation);
 
-    size_t gc_count_after = rb_gc_count();
-    size_t minor_after = rb_gc_stat(ID2SYM(rb_intern("minor_gc_count")));
-    size_t major_after = rb_gc_stat(ID2SYM(rb_intern("major_gc_count")));
-    fprintf(stderr, "after  rb_funcall: gc_count=%zu minor=%zu major=%zu (delta: %zu minor, %zu major)\n",
-            gc_count_after, minor_after, major_after,
-            minor_after - minor_before, major_after - major_before);
-
-    fprintf(stderr, "blocking_operation_wait: operation=%p, operation->status=%d\n", operation, operation->status);
-
-    // Evidence suggests this fails:
     operation = get_blocking_operation(blocking_operation);
-    fprintf(stderr, "get_blocking_operation: operation=%p, operation->status=%d\n", operation, operation->status);
 
     // Get the operation data to check if it was executed
     rb_atomic_t current_status = RUBY_ATOMIC_LOAD(operation->status);
