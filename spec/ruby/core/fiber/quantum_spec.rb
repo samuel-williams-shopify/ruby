@@ -23,20 +23,38 @@ ruby_version_is "4.1" do
       f.quantum.should == 25_000
     end
 
-    it "raises ArgumentError when set to 0" do
+    it "raises ArgumentError when initialized with non-positive values" do
+      -> { Fiber.new(quantum: 0) { Fiber.yield } }.should raise_error(ArgumentError)
+      -> { Fiber.new(quantum: -1) { Fiber.yield } }.should raise_error(ArgumentError)
+    end
+
+    it "raises ArgumentError when set to non-positive values" do
       f = Fiber.new { Fiber.yield }
       -> { f.quantum = 0 }.should raise_error(ArgumentError)
+      -> { f.quantum = -1 }.should raise_error(ArgumentError)
+    end
+
+    it "raises TypeError when initialized with a non-integer" do
+      -> { Fiber.new(quantum: 1.5) { Fiber.yield } }.should raise_error(TypeError)
     end
 
     it "raises TypeError when set to a non-numeric" do
       f = Fiber.new { Fiber.yield }
       -> { f.quantum = :big }.should raise_error(TypeError)
       -> { f.quantum = nil }.should raise_error(TypeError)
+      -> { f.quantum = 1.5 }.should raise_error(TypeError)
     end
 
     it "raises TypeError when set to a symbol" do
       f = Fiber.new { Fiber.yield }
       -> { f.quantum = :large }.should raise_error(TypeError)
+    end
+
+    it "raises RangeError when initialized or set beyond the uint32 range" do
+      f = Fiber.new { Fiber.yield }
+
+      -> { Fiber.new(quantum: 2**32) { Fiber.yield } }.should raise_error(RangeError)
+      -> { f.quantum = 2**32 }.should raise_error(RangeError)
     end
 
     it "controls the runtime value at forced preemption" do

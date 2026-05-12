@@ -605,8 +605,24 @@ class TestFiber < Test::Unit::TestCase
   def test_fiber_quantum_must_be_positive
     f = Fiber.new { Fiber.yield }
     assert_raise(ArgumentError) { f.quantum = 0 }
+    assert_raise(ArgumentError) { f.quantum = -1 }
+    assert_raise(ArgumentError) { Fiber.new(quantum: 0) { Fiber.yield } }
+    assert_raise(ArgumentError) { Fiber.new(quantum: -1) { Fiber.yield } }
+  end
+
+  def test_fiber_quantum_must_be_integer
+    f = Fiber.new { Fiber.yield }
     # Non-integer types should raise TypeError.
     assert_raise(TypeError) { f.quantum = :large }
+    assert_raise(TypeError) { f.quantum = 1.5 }
+    assert_raise(TypeError) { Fiber.new(quantum: :large) { Fiber.yield } }
+    assert_raise(TypeError) { Fiber.new(quantum: 1.5) { Fiber.yield } }
+  end
+
+  def test_fiber_quantum_must_fit_uint32
+    f = Fiber.new { Fiber.yield }
+    assert_raise(RangeError) { f.quantum = 2**32 }
+    assert_raise(RangeError) { Fiber.new(quantum: 2**32) { Fiber.yield } }
   end
 
   def test_fiber_runtime_starts_at_zero

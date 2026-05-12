@@ -2368,6 +2368,27 @@ rb_fiber_storage_aset(VALUE class, VALUE key, VALUE value)
     }
 }
 
+static uint32_t
+fiber_quantum_value(VALUE val)
+{
+    if (RB_FLOAT_TYPE_P(val)) {
+        rb_raise(rb_eTypeError, "quantum must be an Integer");
+    }
+
+    VALUE integer = rb_to_int(val);
+
+    if (FIXNUM_P(integer)) {
+        if (FIX2LONG(integer) <= 0) {
+            rb_raise(rb_eArgError, "quantum must be positive");
+        }
+    }
+    else if (RBIGNUM_NEGATIVE_P(integer)) {
+        rb_raise(rb_eArgError, "quantum must be positive");
+    }
+
+    return NUM2UINT(integer);
+}
+
 static VALUE
 fiber_initialize(VALUE self, VALUE proc, struct fiber_pool * fiber_pool, unsigned int blocking, VALUE storage, VALUE quantum)
 {
@@ -2388,9 +2409,7 @@ fiber_initialize(VALUE self, VALUE proc, struct fiber_pool * fiber_pool, unsigne
     fiber->stack.pool = fiber_pool;
 
     if (!UNDEF_P(quantum)) {
-        uint32_t q = NUM2UINT(quantum);
-        if (q == 0) rb_raise(rb_eArgError, "quantum must be positive");
-        fiber->cont.saved_ec.quantum = q;
+        fiber->cont.saved_ec.quantum = fiber_quantum_value(quantum);
     }
 
     return self;
@@ -3020,9 +3039,7 @@ static VALUE
 rb_fiber_quantum_set(VALUE self, VALUE val)
 {
     rb_fiber_t *fiber = fiber_ptr(self);
-    uint32_t q = NUM2UINT(val);
-    if (q == 0) rb_raise(rb_eArgError, "quantum must be positive");
-    fiber->cont.saved_ec.quantum = q;
+    fiber->cont.saved_ec.quantum = fiber_quantum_value(val);
     return val;
 }
 
